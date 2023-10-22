@@ -507,6 +507,87 @@ calling initialPressureProject
 amrex::Abort::0::MLMG failed !!!
 ```
 
+------------------------2023.10.21------------------------
+
+```
+//IAMR/Source/NavierStokesBase.cpp
+Real NavierStokesBase::estTimeStep() {
+	...
+	u_max = S_new.norm0({AMREX_D_DECL(0,1,2)},0,true,true); //    1)
+	...
+}
+
+//amrex/Src/Base/AMRex_FabArray.cpp
+FabArray<FAB>::normif(...) {
+	        auto const& ma = this->const_arrays(); //       2)
+            nm0 = ParReduce(TypeList<ReduceOpMax>{}, TypeList<RT>{}, *this, nghost, ncomp,
+            [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k, int n) noexcept -> GpuTuple<RT>
+            {
+                return std::abs(ma[box_no](i,j,k,comp+n));
+            }); //          3)
+}
+
+MultiArray4<typename FabArray<FAB>::value_type const>
+FabArray<FAB>::const_arrays () const noexcept
+{
+    build_arrays();
+    return m_const_arrays;
+}
+
+void
+FabArray<FAB>::build_arrays () const
+{
+    using A = Array4<value_type>;
+    using AC = Array4<value_type const>;
+    static_assert(sizeof(A) == sizeof(AC), "sizeof(Array4<T>) != sizeof(Array4<T const>)");
+    if (!m_hp_arrays && local_size() > 0) {
+        const int n = local_size();
+#ifdef AMREX_USE_GPU
+        m_hp_arrays = (void*)The_Pinned_Arena()->alloc(n*2*sizeof(A));
+        m_dp_arrays = (void*)The_Arena()->alloc(n*2*sizeof(A));  //                4)
+#else
+        m_hp_arrays = (void*)std::malloc(n*2*sizeof(A));
+#endif
+        for (int li = 0; li < n; ++li) {
+            if (m_fabs_v[li]) {
+                new ((A*)m_hp_arrays+li) A(m_fabs_v[li]->array());
+                new ((AC*)m_hp_arrays+li+n) AC(m_fabs_v[li]->const_array());
+            } else {
+                new ((A*)m_hp_arrays+li) A{};
+                new ((AC*)m_hp_arrays+li+n) AC{};
+            }
+        }
+        m_arrays.hp = (A*)m_hp_arrays;
+        m_const_arrays.hp = (AC*)m_hp_arrays + n;
+#ifdef AMREX_USE_GPU
+        m_arrays.dp = (A*)m_dp_arrays;
+        m_const_arrays.dp = (AC*)m_dp_arrays + n;
+        Gpu::htod_memcpy(m_dp_arrays, m_hp_arrays, n*2*sizeof(A));
+#endif
+    }
+}
+
+//amrex/Src/Base/AMRex_ParReduce.H
+template <typename Op, typename T, typename FAB, typename F,
+          typename foo = std::enable_if_t<IsBaseFab<FAB>::value> >
+T ParReduce(...) {  //          5)
+    amrex::ignore_unused(operation_list,type_list);
+    ReduceOps<Op> reduce_op;
+    ReduceData<T> reduce_data(reduce_op);
+    reduce_op.eval(fa, nghost, ncomp, reduce_data, std::forward<F>(f));
+    auto const& hv = reduce_data.value(reduce_op);
+    return amrex::get<0>(hv);
+}
+```
+
+语句1)返回错误结果导致程序没有正常运行。
+
+语句4)返回一个非空的指针。
+
+语句3)可能没有被正确执行？
+
+应该不是统一内存的问题。关闭统一内存后语句1)仍然返回错误结果。在A100上关闭统一内存程序仍然可以运行。
+
 #### ConvectedVortex
 
 函数GPU::htod_memcpy_async报错：
@@ -589,6 +670,25 @@ See Backtrace.0 file for details
 * 在a100上将makefile改为float报错：../../Source/Projection.cpp(58): error: floating-point value does not fit in required floating-point type
 
 在a100上不需要修改就能运行，跑了大概363个step。
+
+#### TracerAdvection
+
+```
+Initializing CUDA...
+CUDA initialized with 1 device.
+AMReX (23.05-29-g76d6d344e12d-dirty) initialized
+Successfully read inputs file ... 
+Successfully read inputs file ... 
+NavierStokesBase::init_additional_state_types()::have_divu = 0
+NavierStokesBase::init_additional_state_types()::have_dsdt = 0
+NavierStokesBase::init_additional_state_types: num_state_type = 3
+
+NavierStokesBase::estTimeStep() failed to provide a good timestep (probably because initial velocity field is zero with no external forcing).
+Use ns.init_dt to provide a reasonable timestep on coarsest level.
+Note that ns.init_shrink will be applied to init_dt.
+```
+
+
 
 #### amrex依赖
 
@@ -890,6 +990,28 @@ a100+nvcc:
 
 缺少cuda版本
 
+--------------2023.10.16------------
+
+使用来自https://github.com/han-minhee/hpcg-cuda/tree/master仓库的代码。
+
+可以编译，不能正常运行：
+```
+MPI disabled
+mpi comm rank, 0 1 size 
+devices: 5 
+Using CUDA device (0): Iluvatar BI-V100 (32768 MB global memory)
+
+Setup Phase took 0.01 sec
+
+Copying GPU assembled data to host for reference computations
+
+Checking assembled data ...
+xhpcg: src/CheckProblem.cpp:139: void CheckProblem(SparseMatrix &, Vector *, Vector *, Vector *): Assertion `bv[currentLocalRow] == 26.0 - ((double)(numberOfNonzerosInRow - 1))' failed.
+Aborted (core dumped)
+```
+
+可能是因为使用了双精度？
+
 ### hpl
 
 ### hpl-mxp
@@ -1015,6 +1137,10 @@ a100+nvcc:可以正常编译，可执行文件位于Linux-x86_64-g++文件夹下
 
 ### nwchem
 
+-------------2023.10.22------------------
+
+编译成功，可执行文件位于bin/LINUX64/nwchem
+
 ### relion
 
 找不到omp.h?
@@ -1069,9 +1195,29 @@ cmake版本太低
 
 ### mpas
 
+### opemmm
+
 ### openfoam
 
+#### paralution
+
+可以编译
+
+#### RapidCFD
+
+需要改Makefile，指定了架构
+
 ### petsc
+
+```
+*********************************************************************************************
+           UNABLE to CONFIGURE with GIVEN OPTIONS (see configure.log for details):
+---------------------------------------------------------------------------------------------
+  --with-cuda-lib=['/usr/local/corex/lib'] and
+  --with-cuda-include=['/usr/local/corex/include'] did not work
+*********************************************************************************************
+```
+
 
 ## ecp proxy app: 4.0&5.0
 
