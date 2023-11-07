@@ -1014,6 +1014,28 @@ Aborted (core dumped)
 
 ### hpl
 
+使用来自https://github.com/avidday/hpl-cuda.git的代码。
+
+```
+/usr/bin/ld: /mnt/nvme0/home/lianghz/workspace/gpu_test/infinityhub/hpl-cuda/lib/CUDA/libhpl.a(HPL_gpusupport.o): undefined reference to symbol 'cuMemGetInfo_v2@@CUDA'
+/usr/bin/ld: /usr/local/corex/lib64/libcuda.so.1: error adding symbols: DSO missing from command line
+```
+
+-----------2023.11.2---------------
+
+ 在链接时加入cuda库后：
+
+```
+/usr/bin/ld: /mnt/nvme0/home/lianghz/workspace/gpu_test/infinityhub/hpl-cuda/lib/CUDA/libhpl.a(HPL_gpusupport.o): in function `gpu_init':
+HPL_gpusupport.c:(.text+0x140): undefined reference to `cublasInit'
+/usr/bin/ld: HPL_gpusupport.c:(.text+0x212): undefined reference to `cublasDscal'
+/usr/bin/ld: HPL_gpusupport.c:(.text+0x217): undefined reference to `cublasGetError'
+/usr/bin/ld: HPL_gpusupport.c:(.text+0x241): undefined reference to `cublasShutdown'
+/usr/bin/ld: HPL_gpusupport.c:(.text+0x24e): undefined reference to `cublasShutdown'
+/usr/bin/ld: HPL_gpusupport.c:(.text+0x298): undefined reference to `cublasGetError'
+```
+
+
 ### hpl-mxp
 
 ### lammps
@@ -1130,7 +1152,6 @@ In file included from /usr/local/corex-3.0.0/lib/clang/13.0.1/include/__clang_cu
   tex1Dfetch(&ret, texObject, x);
 ```
 
-
 a100+nvcc:可以正常编译，可执行文件位于Linux-x86_64-g++文件夹下
 
 ### namd3.0
@@ -1195,7 +1216,7 @@ cmake版本太低
 
 ### mpas
 
-### opemmm
+### openmm
 
 ### openfoam
 
@@ -1217,7 +1238,6 @@ cmake版本太低
   --with-cuda-include=['/usr/local/corex/include'] did not work
 *********************************************************************************************
 ```
-
 
 ## ecp proxy app: 4.0&5.0
 
@@ -1838,6 +1858,11 @@ omp.h:
 /usr/bin/ld: /usr/local/corex-3.0.0/bin/../lib/libcudart.so: undefined reference to `cuProfilerInitialize@CUDA'
 
 ```
+
+-----------------2023.11.1---------------------
+
+可能需要链接libcuda.so
+
 ### 特殊符号识别
 
 天数编译器似乎不能正确识别<< <和>> >。
@@ -1845,3 +1870,15 @@ omp.h:
 ### 纹理相关函数
 
 部分程序中似乎使用了与纹理有关的函数，天数提供的cuda库中不确定有没有实现。
+
+### driver API
+
+应该不支持
+
+--------------------------2023.11.1------------------------------
+
+可能需要链接libcuda.so
+
+### 动态并行
+
+可能不支持动态并行：没有找到cudadevrt库
